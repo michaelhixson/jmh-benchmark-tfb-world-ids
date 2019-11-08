@@ -1,8 +1,10 @@
 package rnd;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Sets;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
+import java.util.BitSet;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -13,6 +15,7 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
@@ -35,30 +38,43 @@ public class WorldIdsBenchmark {
     new Runner(options).run();
   }
 
-  private static final class World {
-    int id;
-    int randomNumber;
+  public static final class World {
+    public final int id;
+    public final int randomNumber;
 
-    World(int id, int randomNumber) {
+    public World(int id, int randomNumber) {
       this.id = id;
       this.randomNumber = randomNumber;
     }
   }
 
-  private static World getWorld(int id) {
-    // stand-in for database query
-    int randomNumber = ThreadLocalRandom.current().nextInt(1, 10_001);
-    return new World(id, randomNumber);
+  @VisibleForTesting
+  static final int MIN_WORLD_NUMBER = 1;
+
+  @VisibleForTesting
+  static final int MAX_WORLD_NUMBER_PLUS_ONE = 10_001;
+
+  private static int randomWorldNumber() {
+    return ThreadLocalRandom.current().nextInt(MIN_WORLD_NUMBER,
+                                               MAX_WORLD_NUMBER_PLUS_ONE);
   }
 
-  private int queries = 20;
+  private static World getWorld(int id) {
+    // stand-in for database query
+    return new World(id, randomWorldNumber());
+  }
+
+  @VisibleForTesting
+  @Param("20")
+  int queries;
 
   @Benchmark
   public World[] atomicCounter() {
     World[] worlds = new World[queries];
     AtomicInteger i = new AtomicInteger(0);
-    ThreadLocalRandom.current()
-        .ints(1, 10_001)
+    ThreadLocalRandom
+        .current()
+        .ints(MIN_WORLD_NUMBER, MAX_WORLD_NUMBER_PLUS_ONE)
         .distinct()
         .limit(queries)
         .forEach(id -> worlds[i.getAndAdd(1)] = getWorld(id));
@@ -69,8 +85,9 @@ public class WorldIdsBenchmark {
   public World[] arrayCounter() {
     World[] worlds = new World[queries];
     int[] i = { 0 };
-    ThreadLocalRandom.current()
-        .ints(1, 10_001)
+    ThreadLocalRandom
+        .current()
+        .ints(MIN_WORLD_NUMBER, MAX_WORLD_NUMBER_PLUS_ONE)
         .distinct()
         .limit(queries)
         .forEach(id -> worlds[i[0]++] = getWorld(id));
@@ -79,8 +96,9 @@ public class WorldIdsBenchmark {
 
   @Benchmark
   public World[] streamOnly() {
-    return ThreadLocalRandom.current()
-        .ints(1, 10_001)
+    return ThreadLocalRandom
+        .current()
+        .ints(MIN_WORLD_NUMBER, MAX_WORLD_NUMBER_PLUS_ONE)
         .distinct()
         .limit(queries)
         .mapToObj(id -> getWorld(id))
@@ -94,7 +112,7 @@ public class WorldIdsBenchmark {
     for (int i = 0; i < queries; i++) {
       int id;
       do {
-        id = ThreadLocalRandom.current().nextInt(1, 10_001);
+        id = randomWorldNumber();
       } while (!ids.add(id));
       worlds[i] = getWorld(id);
     }
@@ -109,10 +127,44 @@ public class WorldIdsBenchmark {
     for (int i = 0; i < queries; i++) {
       int id;
       do {
-        id = ThreadLocalRandom.current().nextInt(1, 10_001);
+        id = randomWorldNumber();
       } while (!ids.add(id));
       worlds[i] = getWorld(id);
     }
     return worlds;
+  }
+
+  @Benchmark
+  public World[] bitSet() {
+    BitSet ids = new BitSet(MAX_WORLD_NUMBER_PLUS_ONE);
+    World[] worlds = new World[queries];
+    for (int i = 0; i < queries; i++) {
+      int id;
+      do {
+        id = randomWorldNumber();
+      } while (ids.get(id));
+      ids.set(id);
+      worlds[i] = getWorld(id);
+    }
+    return worlds;
+  }
+
+  @Benchmark
+  public World[] noSet() {
+    World[] worlds = new World[queries];
+    if (queries == 0) return worlds;
+    outerLoop:
+    for (int i = 0;;) {
+      int id = randomWorldNumber();
+      for (int j = 0; j < i; j++) {
+        if (worlds[j].id == id) {
+          continue outerLoop;
+        }
+      }
+      worlds[i] = getWorld(id);
+      if (++i == queries) {
+        return worlds;
+      }
+    }
   }
 }
